@@ -14,6 +14,44 @@ import { shouldUsePluelyAPI } from "./pluely.api";
 import { CHUNK_POLL_INTERVAL_MS } from "../chat-constants";
 import { getResponseSettings, RESPONSE_LENGTHS, LANGUAGES } from "@/lib";
 import { MARKDOWN_FORMATTING_INSTRUCTIONS } from "@/config/constants";
+import { AI_PROVIDERS } from "@/config";
+
+// Free OpenRouter models tried in order after the primary provider hits a
+// rate limit. Mix of vision-capable and text-only models so most requests
+// (including screenshots) still have a shot at succeeding somewhere in the chain.
+const OPENROUTER_FALLBACK_MODELS = [
+  "google/gemma-4-31b-it:free", // vision + text
+  "openai/gpt-oss-120b:free", // strong general text
+  "qwen/qwen3-coder:free", // strong for code, huge context
+  "nvidia/nemotron-nano-12b-v2-vl:free", // vision + text, smaller backup
+  "meta-llama/llama-3.3-70b-instruct:free", // general backup
+];
+
+function loadFallbackProvider(
+  fallbackIndex: number
+): { provider: TYPE_PROVIDER; selectedProvider: { provider: string; variables: Record<string, string> } } | null {
+  try {
+    const model = OPENROUTER_FALLBACK_MODELS[fallbackIndex];
+    if (!model) return null;
+    const cache = JSON.parse(localStorage.getItem("curl_ai_vars_cache") || "{}");
+    const vars = cache["openrouter"];
+    if (!vars || !vars.api_key) return null;
+    const provider = AI_PROVIDERS.find((p) => p.id === "openrouter");
+    if (!provider) return null;
+    return {
+      provider,
+      selectedProvider: { provider: "openrouter", variables: { ...vars, model } },
+    };
+  } catch {
+    return null;
+  }
+}
+
+function persistFallbackAsActive(providerId: string, variables: Record<string, string>) {
+  try {
+    localStorage.setItem("curl_selected_ai_provider", JSON.stringify({ provider: providerId, variables }));
+  } catch {}
+}
 
 function buildEnhancedSystemPrompt(baseSystemPrompt?: string): string {
   const responseSettings = getResponseSettings();
@@ -172,6 +210,7 @@ export async function* fetchAIResponse(params: {
   userMessage: string;
   imagesBase64?: string[];
   signal?: AbortSignal;
+  fallbackIndex?: number;
 }): AsyncIterable<string> {
   try {
     const {
@@ -182,6 +221,7 @@ export async function* fetchAIResponse(params: {
       userMessage,
       imagesBase64 = [],
       signal,
+      fallbackIndex = 0,
     } = params;
 
     // Check if already aborted
@@ -291,7 +331,10 @@ export async function* fetchAIResponse(params: {
       }
     }
 
-    const fetchFunction = url?.includes("http") ? fetch : tauriFetch;
+    // Always use Tauri's HTTP client (reqwest) so requests honor the
+    // system proxy (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY); the WebView's
+    // native fetch does not pick those up.
+    const fetchFunction = tauriFetch;
 
     let response;
     try {
@@ -316,6 +359,22 @@ export async function* fetchAIResponse(params: {
     }
 
     if (!response.ok) {
+      // Auto-fallback through a chain of free OpenRouter models on rate limit
+      // or server errors, advancing one step further down the chain each time.
+      if (response.status === 429 || response.status === 503) {
+        const fallback = loadFallbackProvider(fallbackIndex);
+        if (fallback) {
+          persistFallbackAsActive(fallback.selectedProvider.provider, fallback.selectedProvider.variables);
+          yield* fetchAIResponse({
+            ...params,
+            provider: fallback.provider,
+            selectedProvider: fallback.selectedProvider,
+            fallbackIndex: fallbackIndex + 1,
+          });
+          return;
+        }
+      }
+
       let errorText = "";
       try {
         errorText = await response.text();

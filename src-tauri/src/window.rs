@@ -35,16 +35,40 @@ pub fn position_window_top_center(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Get the primary monitor
     if let Some(monitor) = window.primary_monitor()? {
+        let scale_factor = window.scale_factor().unwrap_or(1.0);
         let monitor_size = monitor.size();
         let window_size = window.outer_size()?;
 
-        // Calculate center X position
-        let center_x = (monitor_size.width as i32 - window_size.width as i32) / 2;
+        // The window may not be mapped/realized yet at this point (notably
+        // under XWayland), in which case outer_size() reports 0x0. Fall back
+        // to the width configured in tauri.conf.json (logical pixels,
+        // converted to physical) so the window still ends up roughly
+        // centered instead of column-shifted off-screen.
+        let window_width = if window_size.width > 0 {
+            window_size.width as f64
+        } else {
+            600.0 * scale_factor
+        };
+
+        let target_x = (monitor_size.width as f64 - window_width) / 2.0;
+        let target_y = y_offset as f64 * scale_factor;
+
+        // GDK's X11 backend applies the HiDPI scale factor a second time
+        // when moving a window via XMoveWindow under XWayland, doubling the
+        // final on-screen position. Pre-divide by the scale factor to
+        // compensate, but only when actually running under the forced X11
+        // backend (native Wayland doesn't exhibit this bug).
+        let running_under_x11 = std::env::var("GDK_BACKEND").as_deref() == Ok("x11");
+        let (final_x, final_y) = if running_under_x11 && scale_factor > 1.0 {
+            (target_x / scale_factor, target_y / scale_factor)
+        } else {
+            (target_x, target_y)
+        };
 
         // Set the window position
         window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-            x: center_x,
-            y: y_offset,
+            x: final_x as i32,
+            y: final_y as i32,
         }))?;
     }
 

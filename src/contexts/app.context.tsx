@@ -520,6 +520,20 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     ...customSttProviders,
   ];
 
+  const getProviderVarsCache = (cacheKey: string): Record<string, Record<string, string>> => {
+    try {
+      return JSON.parse(safeLocalStorage.getItem(cacheKey) || "{}");
+    } catch {
+      return {};
+    }
+  };
+
+  const saveProviderVarsCache = (cacheKey: string, providerId: string, vars: Record<string, string>) => {
+    const cache = getProviderVarsCache(cacheKey);
+    cache[providerId] = vars;
+    safeLocalStorage.setItem(cacheKey, JSON.stringify(cache));
+  };
+
   const onSetSelectedAIProvider = ({
     provider,
     variables,
@@ -530,6 +544,21 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     if (provider && !allAiProviders.some((p) => p.id === provider)) {
       console.warn(`Invalid AI provider ID: ${provider}`);
       return;
+    }
+
+    // Save current provider's variables to cache before switching
+    if (selectedAIProvider.provider && Object.keys(selectedAIProvider.variables).length > 0) {
+      saveProviderVarsCache("curl_ai_vars_cache", selectedAIProvider.provider, selectedAIProvider.variables);
+    }
+
+    // If switching providers with empty variables, restore cached vars
+    const resolvedVars = Object.keys(variables).length === 0
+      ? (getProviderVarsCache("curl_ai_vars_cache")[provider] || {})
+      : variables;
+
+    // Save new provider's vars if provided
+    if (Object.keys(resolvedVars).length > 0) {
+      saveProviderVarsCache("curl_ai_vars_cache", provider, resolvedVars);
     }
 
     // Update supportsImages immediately when provider changes
@@ -547,7 +576,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     setSelectedAIProvider((prev) => ({
       ...prev,
       provider,
-      variables,
+      variables: resolvedVars,
     }));
   };
 
@@ -564,7 +593,21 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       return;
     }
 
-    setSelectedSttProvider((prev) => ({ ...prev, provider, variables }));
+    // Save current STT provider's variables to cache before switching
+    if (selectedSttProvider.provider && Object.keys(selectedSttProvider.variables).length > 0) {
+      saveProviderVarsCache("curl_stt_vars_cache", selectedSttProvider.provider, selectedSttProvider.variables);
+    }
+
+    // Restore cached vars when switching with empty variables
+    const resolvedVars = Object.keys(variables).length === 0
+      ? (getProviderVarsCache("curl_stt_vars_cache")[provider] || {})
+      : variables;
+
+    if (Object.keys(resolvedVars).length > 0) {
+      saveProviderVarsCache("curl_stt_vars_cache", provider, resolvedVars);
+    }
+
+    setSelectedSttProvider((prev) => ({ ...prev, provider, variables: resolvedVars }));
   };
 
   // Toggle handlers

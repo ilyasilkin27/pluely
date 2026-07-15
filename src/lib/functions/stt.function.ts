@@ -185,7 +185,10 @@ export async function fetchSTT(params: STTParams): Promise<string> {
       body = JSON.stringify(deepVariableReplacer(dataObj, allVariables));
     }
 
-    const fetchFunction = url?.includes("http") ? fetch : tauriFetch;
+    // Always use Tauri's HTTP client (reqwest) so requests honor the
+    // system proxy (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY); the WebView's
+    // native fetch does not pick those up.
+    const fetchFunction = tauriFetch;
 
     // Send request
     let response: Response;

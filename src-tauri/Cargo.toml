@@ -1,6 +1,6 @@
 [package]
 name = "pluely"
-version = "0.1.9"
+version = "1.0.0"
 description = "The Open Source Alternative to Cluely - A lightning-fast, privacy-first AI assistant that works seamlessly during meetings, interviews, and conversations without anyone knowing."
 authors = ["Srikanth Nani <mail@srikanthnani.com>"]
 license = "GPL-3.0"
